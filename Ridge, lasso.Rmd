@@ -1,0 +1,309 @@
+
+
+
+## R Markdown
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(R.matlab)
+library(splines)
+library(glmnet)
+library(fda)
+
+library(caret)
+library(naniar)
+library(ComplexHeatmap)
+library(ggplot2)
+library(dplyr)
+#install.packages("R.matlab")
+#install.packages("fda")
+
+set.seed(44)
+```
+
+### Read the matrix
+```{r}
+input <- read.table("income_democracy.csv", sep=',', header=TRUE)
+tail(input)
+```
+
+
+
+
+```{r}
+data <- input[3:12]
+tail(data)
+
+```
+
+
+### number of nulls per col
+```{r}
+gg_miss_var(data)
+```
+
+
+### visulaize missing data
+
+```{r}
+vis_miss(data)
+```
+
+### remove missing data and visualize dataset again
+
+```{r}
+data_clean <- data[complete.cases(data),]
+vis_miss(data_clean)
+```
+
+
+### Split data into train and test (80:20)
+```{r}
+train_rows <- sample(seq_len(nrow(data_clean)), size = floor(0.8 * nrow(data_clean)))
+train_data <- data_clean[train_rows, ]
+
+test_data <- data_clean[-train_rows, ]
+```
+
+### split data into X_train, y_train, X_test, y_test 
+```{r}
+
+X_train <- as.matrix(train_data[,2:10])
+y_train <- as.matrix(train_data$dem_ind)
+
+X_test <- as.matrix(test_data[,2:10])
+y_test <- as.matrix(test_data$dem_ind)
+
+```
+
+
+
+# 1. Ridge Regression
+
+### Cross validation to find optimal lambda for ridge regression
+```{r}
+#lambdas <- 10^seq(2, -3, by = -.1)
+cv_ridge <- cv.glmnet(X_train, y_train, alpha = 0, family = "gaussian", nfolds=10, type.measure="mse", standardize=TRUE)
+
+optimal_lambda <- cv_ridge$lambda.min
+optimal_lambda
+```
+
+
+### create ridge regression model with optimal lambda and report train and test MSE
+```{r}
+
+ridge_reg <- glmnet(X_train, y_train, lambda = optimal_lambda, alpha=0, family = "gaussian", standardize=T)
+
+predictions_test <- predict(ridge_reg, X_test)
+predictions_train <- predict(ridge_reg, X_train)
+
+
+MSE_train <- mean((y_train - predictions_train)^2)
+MSE_test <- mean((y_test - predictions_test)^2)
+```
+
+#### MSE_test:  0.0606
+#### MSE_train: 0.0623
+
+### coeficients
+```{r}
+coef(ridge_reg)
+```
+
+# plot coefficients (all coefficients are selected in Ridge)
+```{r}
+
+
+plot( glmnet(X_train, y_train, alpha=0, family = "gaussian", standardize=T), xvar = "lambda", label = TRUE)
+
+abline(v = log(optimal_lambda))
+
+```
+
+
+# 2. Lasso Regression
+
+### Cross validation to find optimal lambda for lasso regression
+```{r}
+#lambdas <- 10^seq(2, -3, by = -.1)
+cv_lasso <- cv.glmnet(X_train, y_train, alpha = 1, family = "gaussian", nfolds=10, type.measure="mse", standardize=TRUE)
+
+optimal_lambda <- cv_lasso$lambda.min
+optimal_lambda
+```
+
+
+### create ridge regression model with optimal lambda and report train and test MSE
+```{r}
+
+lasso_reg <- glmnet(X_train, y_train, lambda = optimal_lambda, alpha=1, family = "gaussian", standardize=T)
+
+predictions_test <- predict(lasso_reg, X_test)
+predictions_train <- predict(lasso_reg, X_train)
+
+
+MSE_train <- mean((y_train - predictions_train)^2)
+MSE_test <- mean((y_test - predictions_test)^2)
+```
+
+#### MSE_test:  0.0614
+#### MSE_train: 0.0628
+
+### coeficients
+```{r}
+coef(lasso_reg)
+```
+
+### plot lasso coeff and best lambda
+```{r}
+
+plot(glmnet(X_train, y_train, family = "gaussian", alpha = 1, standardize=T), xvar = "lambda", label = TRUE)
+abline(v = log(optimal_lambda))
+
+```
+
+
+
+# 3. Ababtive Lasso Regression
+
+
+
+### Cross validation to find optimal lambda for ridge regression
+```{r}
+#lambdas <- 10^seq(2, -3, by = -.1)
+cv_ridge2 <- cv.glmnet(X_train, y_train, alpha = 0, family = "gaussian", nfolds=10, type.measure="mse", standardize=TRUE)
+
+optimal_lambda <- cv_ridge2$lambda.min
+optimal_lambda
+```
+
+#### get coeffs of ridge
+```{r}
+
+b.ridge <- matrix(coef(cv_ridge2, s = optimal_lambda))[2:10]
+b.ridge
+```
+
+#### calc wights for adabtive lasso
+```{r}
+gamma = 1
+w <- 1/abs(b.ridge)^gamma
+```
+
+### Cross validation to find optimal lambda for adabtive lasso regression
+```{r}
+lambdas <- 10^seq(2, -3, by = -.1)
+cv_adab_lasso <- cv.glmnet(X_train, y_train, alpha = 1, family = "gaussian", nfolds=10, type.measure="mse",  standardize=TRUE, penalty.factor = w)
+
+optimal_lambda <- cv_adab_lasso$lambda.min
+optimal_lambda
+```
+
+
+### create ridge regression model with optimal lambda and report train and test MSE
+```{r}
+
+adab_lasso_reg <- glmnet(X_train, y_train, lambda = optimal_lambda, alpha=1, family = "gaussian", standardize=T, penalty.factor = w)
+
+
+predictions_test <- predict(adab_lasso_reg, X_test)
+predictions_train <- predict(adab_lasso_reg, X_train)
+
+
+MSE_train <- mean((y_train - predictions_train)^2)
+MSE_test <- mean((y_test - predictions_test)^2)
+```
+
+#### MSE_test:  0.0614
+#### MSE_train: 0.0623
+
+### coeficients
+```{r}
+coef(adab_lasso_reg)
+```
+
+
+# plot coefficients
+```{r}
+
+
+plot(glmnet(X_train, y_train, alpha=1, family = "gaussian", standardize=T, penalty.factor = w), xvar = "lambda", label = TRUE)
+
+abline(v = log(optimal_lambda))
+
+```
+
+
+
+# 4. Elastic net Regression
+
+
+### Cross validation to find optimal alpha and lambda for elastic net regression
+
+##### loop over different values of alpha and CV will find the optimal lambda for each alpha that will minimize the MSE of that model (that alpha model)
+
+##### then we pick the best model that minize the MSE (pick it's alpha and lambda)
+```{r}
+alphalist <- seq(0,1,by=0.1)
+best_mse <- rep(0,10)
+
+## loop over different values of alpha and CV will find the optimal lambda for each alpha that will minimize the MSE of that model (that alpha model)
+
+## then we pick the best model that minize the MSE (pick it's alpha and lambda)
+
+elasticnet <- lapply(alphalist, function(a){
+  cv.glmnet(X_train, y_train, alpha=a, nfolds=10, type.measure="mse",family = "gaussian", standardize=TRUE)
+})
+for (i in 1:11) {best_mse[i]=(min(elasticnet[[i]]$cvm))}
+
+
+
+plot(x=alphalist, y=best_mse, type="b")
+```
+
+### optimal alpha
+```{r}
+optimal_alpha <- alphalist[which.min(best_mse)]
+optimal_alpha
+```
+
+### optimal lambda
+
+```{r}
+optimal_lambda <- elasticnet[[which.min(best_mse)]]$lambda.min
+optimal_lambda
+```
+
+
+
+### create final elastic net model with optimal lambda and report train and test MSE
+```{r}
+
+elastic_net_reg <- glmnet(X_train, y_train, alpha = optimal_alpha,lambda = optimal_lambda, family = "gaussian",  standardize=TRUE)
+
+predictions_test <- predict(elastic_net_reg, X_test)
+predictions_train <- predict(elastic_net_reg, X_train)
+
+
+MSE_train <- mean((y_train - predictions_train)^2)
+MSE_test <- mean((y_test - predictions_test)^2)
+```
+
+#### MSE_test:  0.0611
+#### MSE_train: 0.0622
+
+### coeficients
+```{r}
+coef(elastic_net_reg)
+```
+
+# plot coefficients
+```{r}
+
+
+plot( glmnet(X_train, y_train, alpha = optimal_alpha, family = "gaussian",  standardize=TRUE), xvar = "lambda", label = TRUE)
+
+abline(v = log(optimal_lambda))
+
+```
+

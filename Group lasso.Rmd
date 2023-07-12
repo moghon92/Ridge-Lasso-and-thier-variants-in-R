@@ -1,0 +1,283 @@
+---
+title: "Group Lasso"
+author: "MohamedGhoneim"
+date: "05/07/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(R.matlab)
+library(splines)
+library(glmnet)
+library(fda)
+library(grpreg)
+library(R.matlab)
+library(splines)
+library(glmnet)
+library(fda)
+
+library(pracma)
+
+#install.packages("R.matlab")
+#install.packages("fda")
+#install.packages("grpreg")
+```
+
+### Read the matrix
+```{r}
+data <- readMat('NSC.mat')
+```
+
+# a) Plot and present the observations for each sensor in the training data set.
+
+### plot the 10 sensors readings
+```{r}
+for(i in 1:10)
+{
+  x_i<-matrix(unlist(data[[1]][[i]]), ncol=203)
+  matplot(t(x_i), type = "l", xlab = paste("sennsor ",i),ylab = "")
+}
+```
+
+
+### plot the output y
+```{r}
+y<-matrix(unlist(data[[2]]), ncol=203)
+matplot(t(y), type = "l", xlab = "y_trian",ylab = "")
+```
+
+
+
+
+# b) Use B-splines with 8 knots to reduce the dimensionality of the problem.
+
+### read training data and store it in an array X_train
+```{r}
+X_train = array(0,dim=c(150,203,10))
+for(i in 1:10)
+{
+  X_train[,,i]<-matrix(unlist(data[[1]][[i]]), ncol=203)
+}
+```
+
+### read training response into y_train
+
+```{r}
+y_train <- matrix(unlist(data[[2]]), ncol=203)
+dim(y_train)
+```
+
+### generate B spline basis with 8 knots
+
+```{r}
+x = seq(0,1,length=203)
+splinebasis_B=create.bspline.basis(c(0,1),10)
+
+base_B=eval.basis(as.vector(x),splinebasis_B)
+matplot(x, base_B, type = "l")
+```
+
+
+### Reduce dimensionality of X_train using b-spline into Z_train
+```{r}
+Z_train = array(0,dim=c(150,10,10))
+for (i in 1:10){
+  Z_train[,,i] = X_train[,,i] %*% base_B
+}
+
+dim(Z_train)
+```
+
+
+### Reduce dimensionality of y_train using b-spline into yB_train 150x10
+```{r}
+yB_train = y_train %*% base_B
+dim(yB_train)
+```
+
+
+### plot smoothed y_train
+```{r}
+smooth = smooth.basis(x,t(y_train),splinebasis_B)
+Xfun = smooth$fd
+plot(Xfun,  xlab = "y_train_smoothed")
+```
+
+
+# d) Use Group lasso to learn the B-spline coecients.
+
+###  matricize Z_train by horizontally stacking its frontal slice
+```{r}
+Z_tain_flat <-matrix(Z_train ,150,100)
+dim(Z_tain_flat)
+```
+
+### apply kronecker product to create a block diagonal matrix Z_stack (1500x1000)
+```{r}
+I <- diag(10)
+Z_stack <- kronecker(I, Z_tain_flat)
+dim(Z_stack)
+```
+
+
+### vectorize yB_train
+```{r}
+yB_stack<-c(yB_train)
+dim(yB_stack) <- c(dim(yB_train)[1]*dim(yB_train)[2], 1)
+dim(yB_stack)
+```
+
+
+### cross validation to find optimal lambda for group lasso
+```{r}
+group <-  rep(1:10, each=10, times=10)
+
+glasso_cv <- cv.grpreg(Z_stack,yB_stack,group)
+optimal_lambda <- glasso_cv$lambda.min
+
+```
+ 
+### optimal lambda = 0.002133742
+ 
+```{r}
+glasso <- grpreg(Z_stack,yB_stack,group, lambda=optimal_lambda)
+```
+
+
+
+
+####	This is a Multiple Response problem (10 response variables), where each response will have it’s set of 10 regression coefficients  (hence there will be 100 regression coeffs. In total)
+
+## --
+
+#### Reshape the 1000 coefficients of group lasso into a 100x10 matrix where each col represents the coefficients of 1 sensor. Each 10 consecutive rows represent the coeffs for 1st response and so on. Hence 100 rows (10 coeffs x 10 responses)
+
+```{r}
+coefs <- glasso$beta[2:1001,]
+out_cofs <- matrix(0, nrow = 100, ncol = 10)
+
+indexer_col <- rep(1:10,each=10, times=10)
+
+indexer_row <- rep(1:10, times=10)
+for (i in c(11,21,31,41,51,61,71,81,91)) {
+  indexer_row <- append(indexer_row, rep(i:(i+9), times=10))
+}
+
+
+
+for (k in 1:1000) {
+  i <- indexer_row[k]
+  j <- indexer_col[k]
+  out_cofs[i,j] = coefs[k]
+}
+out_cofs
+```
+
+
+
+# e) Predict the air/fuel ratio for the observations in the test set
+### Read test data
+```{r}
+data_test <- readMat('NSC.test.mat')
+
+```
+
+
+### read test data and store it in an array X_test
+```{r}
+X_test = array(0,dim=c(50,203,10))
+for(i in 1:10)
+{
+  X_test[,,i]<-matrix(unlist(data_test[[1]][[i]]), ncol=203)
+}
+dim(X_test)
+```
+
+### read training response into y_test
+
+```{r}
+y_test <- matrix(unlist(data_test[[2]]), ncol=203)
+dim(y_test)
+```
+
+
+### Reduce dimensionality of X_test using b-spline into Z_test
+```{r}
+Z_test = array(0,dim=c(50,10,10))
+for (i in 1:10){
+  Z_test[,,i] = X_test[,,i] %*% base_B
+}
+
+dim(Z_test)
+```
+
+
+### Reduce dimensionality of y_test using same b-spline coeff
+```{r}
+yB_test = y_test %*% base_B
+dim(yB_test)
+```
+
+
+###  matricize Z_test by horizontally stacking its frontal slice
+```{r}
+Z_test_flat <-matrix(Z_test , 50,100)
+dim(Z_test_flat)
+```
+
+### apply kronecker product to create a block diagonal matrix Z_test_stack (500x1000)
+```{r}
+I <- diag(10)
+Z_test_stack <- kronecker(I, Z_test_flat)
+dim(Z_test_stack)
+```
+
+
+### vectorize yB_test
+```{r}
+yB_test_stack<-c(yB_test)
+dim(yB_test_stack) <- c(dim(yB_test)[1]*dim(yB_test)[2], 1)
+dim(yB_test_stack)
+```
+
+
+### Make predictions and calculate MSE
+```{r}
+
+yB_pred <- predict(glasso, Z_test_stack)
+dim(yB_pred) <- c(dim(yB_test_stack)[1]*dim(yB_test_stack)[2], 1)
+
+MSE_test <- mean((yB_test_stack - yB_pred)^2)
+MSE_test
+
+```
+
+
+### MSE = 0.0098
+
+
+
+
+### plot y_test, smoothed y_test and Y_predicted
+```{r}
+ym_pred = matrix(yB_pred, ncol=10)
+Spred=ym_pred%*%pinv(base_B)
+
+smooth = smooth.basis(x,t(y_test),splinebasis_B)
+Xfun = smooth$fd
+
+
+
+matplot(t(y_test), type = "l", xlab = "y_test",ylab = "")
+plot(Xfun, xlab = "y_test_smoothed")
+matplot(t(Spred), type = "l", xlab = "Y_predicted",ylab = "")
+
+```
+
+
+
+
+
+
+
